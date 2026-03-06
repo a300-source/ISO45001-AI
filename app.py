@@ -122,46 +122,66 @@ def get_mock_data_by_source(source_name):
     return []
 
 def fetch_regulatory_news(sources):
-    """模擬串接政府開放資料 API 或 RSS Feed (改寫 JSON 讀取邏輯)"""
+    """模擬串接政府開放資料 API 或 RSS Feed (改寫真實 API/RSS 邏輯)"""
     results = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
-    # 模擬政府 Open Data API 端點 (實務上會替換為真實的 JSON API 網址)
+    # [修復點 1] 改為真實的開放資料來源
     api_endpoints = {
-        "勞動部職安署 (OSHA)": "https://data.gov.tw/api/osha/v1/news.json",
-        "行政院公報資訊網": "https://data.gov.tw/api/gazette/v1/latest.json",
-        "環境部主管法規查詢系統": "https://data.gov.tw/api/epa/v1/law.json",
-        "全國法規資料庫": "https://data.gov.tw/api/moj/v1/law.json"
+        "勞動部職安署 (OSHA)": "https://apis.nat.gov.tw/od/data/api/B4F09062-8E84-48FE-BA2D-F27E9DB416A9?$format=json",
+        "行政院公報資訊網": "https://gazette.nat.gov.tw/egFront/rss.do",
+        "環境部主管法規查詢系統": "https://enews.moenv.gov.tw/enews/rss.asp",
+        "全國法規資料庫": "https://data.gov.tw/api/moj/v1/law.json" # 仍保留一個模擬的作示範
     }
 
     for source in sources:
         url = api_endpoints.get(source, "https://example.com/api")
         try:
-            # 模擬請求 JSON API，設定 timeout 防止卡死
+            # 設定 timeout 防止卡死
             response = requests.get(url, headers=headers, timeout=5)
             response.raise_for_status()
             
-            # [改寫] 改為 JSON 讀取邏輯
-            data = response.json()
             found_items = []
+            today = datetime.date.today().strftime("%Y-%m-%d")
             
-            # 假設標準 Open Data 回傳格式包含 "records" 陣列
-            for item in data.get("records", [])[:3]:
-                found_items.append({
-                    "title": item.get("title", ""),
-                    "date": item.get("date", datetime.date.today().strftime("%Y-%m-%d")),
-                    "source": source
-                })
+            # [修復點 1] 判斷 URL 是否包含 json，分別執行解析邏輯
+            if "json" in url.lower():
+                data = response.json()
+                # 兼容常見的 JSON 格式
+                items = data if isinstance(data, list) else data.get("records", data.get("data", []))
+                for item in items[:5]:
+                    title = item.get("title") or item.get("NewsTitle") or item.get("Title") or "無標題"
+                    date_val = item.get("date") or item.get("Date") or today
+                    found_items.append({
+                        "title": title,
+                        "date": date_val[:10],
+                        "source": source
+                    })
+            else:
+                # 解析 RSS Feed (XML)
+                soup = BeautifulSoup(response.content, 'xml')
+                items = soup.find_all('item')
+                for item in items[:5]:
+                    title_elem = item.find('title')
+                    pubDate_elem = item.find('pubDate')
+                    
+                    title = title_elem.text if title_elem else '無標題'
+                    pubDate = pubDate_elem.text if pubDate_elem else today
+                    found_items.append({
+                        "title": title,
+                        "date": pubDate[:10], # 簡化日期顯示
+                        "source": source
+                    })
             
             if not found_items:
-                raise ValueError("JSON API 中找不到預期資料")
+                raise ValueError("無法從來源解析出預期資料")
                 
-            results.extend(found_items)
+            results.extend(found_items) # 成功抓取，直接加入不標示演示
             
-        except Exception:
-            # Fallback 備援機制：觸發並載入擴充後的假資料
+        except Exception as e:
+            # [修復點 1] Fallback 備援機制：觸發並載入擴充後的假資料
             mock_items = get_mock_data_by_source(source)
             for item in mock_items:
                 item['title'] = f"[演示] {item['title']}"
@@ -192,22 +212,42 @@ def ai_applicability_check(text, equipment_list):
     return False, "無明確關鍵字，建議人工確認。"
 
 def ai_generate_detailed_table(law_content):
-    """第二階段：生成逐條分析表 (V2.3 Regex修復與關鍵字擴充版)"""
+    """第二階段：生成逐條分析表 (V2.3 邏輯合併版)"""
     lines = law_content.split('\n')
     data = []
     
-    current_article = "第X條" # 記錄當前遍歷到的法規條次
+    current_article = None
+    current_content = []
 
-    # [擴充] AI 適用性判讀高風險關鍵字
+    # AI 適用性判讀高風險關鍵字
     high_keywords = ['應', '不得', '罰鍰', '霸凌', '不法侵害', '健康', '體格檢查', '母性', '噪音', '粉塵', '人因', '墜落', '感電', '防護', '承攬', '危害', '風險', '通風', '局排', '溶劑', '許可', '檢查', '申訴', '職災', '職業病', '安全', '衛生', '防護具']
+
+    # [修復點 3] 將同「一條」的內容合併鑑別
+    def save_current_article():
+        if current_article:
+            # 將整條文字合併成一個長字串
+            full_text = "\n".join(current_content).strip()
+            if not full_text:
+                full_text = "(無內容)"
+                
+            # 對整包文字進行一次性判斷
+            applicability = "高" if any(k in full_text for k in high_keywords) else "低"
+            
+            data.append({
+                "條文/項次": current_article,
+                "條文內容摘要": full_text[:60] + "..." if len(full_text) > 60 else full_text,
+                "適用性": applicability
+            })
 
     for line in lines:
         line = line.strip()
-        if len(line) < 2: continue # 忽略空行
+        if not line: continue 
         
-        # [修復 Regex 1] 處理章節 (如: 第 一 章 總則)，作為獨立標題列
+        # 處理章節 (如: 第 一 章 總則)，作為獨立標題列
         match_chapter = re.match(r'^(第\s*[一二三四五六七八九十百千\d]+\s*章)\s*(.*)', line)
         if match_chapter:
+            save_current_article() # 儲存上一筆
+            
             chapter_num = match_chapter.group(1).replace(" ", "")
             chapter_title = match_chapter.group(2).strip()
             data.append({
@@ -215,44 +255,30 @@ def ai_generate_detailed_table(law_content):
                 "條文內容摘要": f"【章節標題】{chapter_title}" if chapter_title else "【章節標題】",
                 "適用性": "-"
             })
+            current_article = None
+            current_content = []
             continue
 
-        # [修復 Regex 2] 支援「第 X 條」、「第 X 條之 X」、「第 X-X 條」
+        # 支援「第 X 條」、「第 X 條之 X」、「第 X-X 條」
         match_article = re.match(r'^(第\s*[一二三四五六七八九十百千\d]+(?:\s*之\s*\d+|-\d+)?\s*條)\s*(.*)', line)
         
         if match_article:
-            # 抓到新條文，更新當前條次
+            save_current_article() # 儲存上一筆
+            
             current_article = match_article.group(1).replace(" ", "")
             content = match_article.group(2).strip()
-            
-            if not content:
-                # 若這行只有「第 6 條」而沒有內容，跳過此迴圈，等下一行處理內容
-                continue 
-            
-            clause = f"{current_article}序文"
+            current_content = [content] if content else []
         else:
-            # 如果不是新條文，判斷是否為「款」或「項」 (一、二、三...)
-            match_item = re.match(r'^([一二三四五六七八九十]+、)\s*(.*)', line)
-            if match_item:
-                clause_num = match_item.group(1).replace("、", "")
-                content = match_item.group(2).strip()
-                clause = f"{current_article}第{clause_num}款"
+            # 遇到「款」或一般內文，合併拼接進目前的條文陣列中
+            if current_article:
+                current_content.append(line)
             else:
-                # 一般內文
-                clause = f"{current_article}內容"
-                content = line
-                
-        if not content:
-            continue
+                # 處理尚未有任何「第X條」前出現的文字
+                current_article = "前言/其他"
+                current_content.append(line)
 
-        # [擴充邏輯] 只要包含清單中任一關鍵字即為高
-        applicability = "高" if any(k in content for k in high_keywords) else "低"
-        
-        data.append({
-            "條文/項次": clause,
-            "條文內容摘要": content[:30] + "..." if len(content) > 30 else content,
-            "適用性": applicability
-        })
+    # 迴圈結束後，儲存最後一筆
+    save_current_article()
         
     if not data:
         data = [{"條文/項次": "無", "條文內容摘要": "無可解析之內容", "適用性": "-"}]
@@ -313,9 +339,11 @@ with tab1:
                 with c4:
                     if st.button("🔍 分析此條文", key=f"btn_src_{i}"):
                         st.session_state['analysis_input_title'] = news['title']
-                        st.session_state.step1_confirmed = False # 切換條文時重置狀態
-                        st.session_state.analysis_df = None      # 切換條文時重置狀態
-                        # [優化 UX] 提示文字更新
+                        # [修復點 2] 修復 Tab 1 標題無法連動到 Tab 2 輸入框的問題 (綁定 UI Key)
+                        st.session_state['input_title_key'] = news['title']
+                        
+                        st.session_state.step1_confirmed = False 
+                        st.session_state.analysis_df = None      
                         st.toast(f"已將「{news['title']}」帶入分析區，請切換至【適用性智慧判讀】分頁", icon="✅")
                 st.divider()
 
@@ -332,13 +360,11 @@ with tab2:
     col_a_input, col_a_btn = st.columns([3, 1])
     
     with col_a_input:
-        # [擴充] 廠區設備更新
         equipment_selected = st.multiselect(
             "關聯廠內設備/製程：",
             ['CNC機台', '堆高機', '高壓氣體', '天車', '熔解爐', '化學品', '有機溶劑', '研磨輪', '高空工作車', '圓盤鋸', '退火爐'],
             default=['CNC機台', '化學品']
         )
-        # [擴充] 新增議題類別
         issue_selected = st.multiselect(
             "涉及危害/議題類別：",
             ['噪音', '粉塵', '人因工程', '不法侵害(霸凌)', '化學性危害', '健康檢查', '母性保護'],
@@ -395,7 +421,6 @@ with tab2:
                 st.warning("請先輸入條文內容。")
 
     if st.session_state.analysis_df is not None:
-        # [標題修正] 刪除 (精簡版)
         st.markdown("#### 📑 法規鑑別對照表")
         
         edited_df = st.data_editor(
@@ -470,7 +495,6 @@ with tab3:
                     save_records(st.session_state['audit_records'])
                     st.success(f"案件 {manual_case['id']} 已建立！")
                     
-                    # [優化] 電子郵件草稿內容豐富化
                     deadline = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
                     draft = f"""
                     主旨：【合規改善通知】{m_title} - 發現潛在風險需改善
@@ -524,30 +548,36 @@ with tab3:
                 # [RBAC 控管] 職安室成員視角
                 if user_role == "職安室成員":
                     if st.button("📧 生成通知信草稿"):
-                        # [優化] 電子郵件草稿內容豐富化
                         deadline = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
                         r_level = case.get('risk_level', '系統評估')
                         sug = case.get('suggestion', '依據法規或內規辦理')
-                        email_draft = f"""
-                        主旨：【合規改善通知】{case['title']} - 發現潛在風險需改善
+                        email_draft = f"""主旨：【合規改善通知】{case['title']} - 發現潛在風險需改善
                         
-                        {case['department']} 主管/同仁 您好：
+{case['department']} 主管/同仁 您好：
                         
-                        依據本廠 ISO 45001 管理系統程序，近期查核發現以下事項，請貴單位協助確認並改善：
+依據本廠 ISO 45001 管理系統程序，近期查核發現以下事項，請貴單位協助確認並改善：
                         
-                        📍 案件標題：{case['title']}
-                        ⚠️ 發現內容：{case['content']}
-                        🔴 風險評估：{r_level}
-                        💡 建議措施：{sug}
+📍 案件標題：{case['title']}
+⚠️ 發現內容：{case['content']}
+🔴 風險評估：{r_level}
+💡 建議措施：{sug}
                         
-                        ⏳ 建議改善期限：{deadline}
+⏳ 建議改善期限：{deadline}
                         
-                        請於期限內回覆改善計畫或完成進度。感謝您的配合！
+請於期限內回覆改善計畫或完成進度。感謝您的配合！
                         
-                        此致
-                        職安室 敬上
-                        """
-                        st.code(email_draft)
+此致
+職安室 敬上
+"""
+                        # [修復點 4] 將草稿存入案件，並存檔以讓主管也能檢視
+                        case['email_draft'] = email_draft
+                        save_records(st.session_state['audit_records'])
+                        st.rerun()
+
+                # [修復點 4] 跳出角色權限判斷：雙方都能看到已生成的草稿
+                if case.get('email_draft'):
+                    st.info("📧 已保存之通知信草稿：")
+                    st.code(case['email_draft'])
             
             with c2:
                 # [RBAC 控管] 職安室主管視角
@@ -561,6 +591,9 @@ with tab3:
                         case['manager_comment'] = comment if comment else "同意備查"
                         case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
                         save_records(st.session_state['audit_records'])
+                        st.success("✅ 案件已成功核准！")
+                        time.sleep(0.5) # 稍微等待提示顯示
+                        # [修復點 5] 強制刷新介面，讓該案件從上方待簽核清單消失
                         st.rerun()
                         
                     if col_btn2.button("❌ 退回"):
@@ -568,6 +601,9 @@ with tab3:
                         case['manager_comment'] = comment if comment else "資料不全，請補充"
                         case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
                         save_records(st.session_state['audit_records'])
+                        st.error("❌ 案件已退回！")
+                        time.sleep(0.5) # 稍微等待提示顯示
+                        # [修復點 5] 強制刷新介面，讓該案件從上方待簽核清單消失
                         st.rerun()
                 else:
                     st.info("🔒 僅限「職安室主管」進行簽核決策。")
