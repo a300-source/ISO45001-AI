@@ -89,75 +89,79 @@ init_session_state()
 # ==========================================
 
 def get_mock_data_by_source(source_name):
-    """根據來源提供特定的模擬數據 (Failover Mock Data)"""
+    """根據來源提供特定的模擬數據 (Failover Mock Data) - [擴充逼真假資料]"""
     today = datetime.date.today().strftime("%Y-%m-%d")
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    last_week = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
     
     if "勞動部職安署" in source_name:
         return [
             {"title": "修正「職業安全衛生設施規則」部分條文，強化機械設備防護", "date": today, "source": "OSHA"},
             {"title": "公告：起重升降機具安全規則修正草案總說明", "date": yesterday, "source": "OSHA"},
+            {"title": "發布「職場夜間工作安全衛生指引」", "date": yesterday, "source": "OSHA"},
+            {"title": "預告修正「危險性工作場所審查及檢查辦法」", "date": last_week, "source": "OSHA"},
         ]
     elif "行政院公報" in source_name:
         return [
             {"title": "預告訂定「碳費徵收費率」草案", "date": today, "source": "Gazette"},
             {"title": "修正「工廠管理輔導法」第28條解釋令", "date": yesterday, "source": "Gazette"},
+            {"title": "發布「事業單位執行預防勞工過勞指引」新修訂版", "date": last_week, "source": "Gazette"},
         ]
     elif "環境部" in source_name:
         return [
             {"title": "修正「固定污染源空氣污染防制費收費費率」", "date": today, "source": "EPA"},
             {"title": "廢棄物清理法部分條文修正草案", "date": yesterday, "source": "EPA"},
+            {"title": "公告「溫室氣體排放量盤查登錄管理辦法」", "date": last_week, "source": "EPA"},
         ]
     elif "全國法規資料庫" in source_name:
         return [
             {"title": "修正「勞工健康保護規則」", "date": today, "source": "MOJ"},
             {"title": "增訂「危險性機械及設備安全檢查規則」部分條文", "date": yesterday, "source": "MOJ"},
+            {"title": "修正「勞工職業災害保險及保護法」", "date": last_week, "source": "MOJ"},
         ]
     return []
 
 def fetch_regulatory_news(sources):
-    """嘗試真實爬蟲，失敗則切換至模擬數據"""
+    """模擬串接政府開放資料 API 或 RSS Feed (改寫 JSON 讀取邏輯)"""
     results = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
-    source_urls = {
-        "勞動部職安署 (OSHA)": "https://www.osha.gov.tw/",
-        "行政院公報資訊網": "https://gazette.nat.gov.tw/",
-        "環境部主管法規查詢系統": "https://oaout.moenv.gov.tw/law/",
-        "全國法規資料庫": "https://law.moj.gov.tw/"
+    # 模擬政府 Open Data API 端點 (實務上會替換為真實的 JSON API 網址)
+    api_endpoints = {
+        "勞動部職安署 (OSHA)": "https://data.gov.tw/api/osha/v1/news.json",
+        "行政院公報資訊網": "https://data.gov.tw/api/gazette/v1/latest.json",
+        "環境部主管法規查詢系統": "https://data.gov.tw/api/epa/v1/law.json",
+        "全國法規資料庫": "https://data.gov.tw/api/moj/v1/law.json"
     }
 
     for source in sources:
-        url = source_urls.get(source, "")
+        url = api_endpoints.get(source, "https://example.com/api")
         try:
-            # 設定 timeout=5 防止卡死
+            # 模擬請求 JSON API，設定 timeout 防止卡死
             response = requests.get(url, headers=headers, timeout=5)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.text, 'html.parser')
+            # [改寫] 改為 JSON 讀取邏輯
+            data = response.json()
             found_items = []
             
-            links = soup.find_all('a', href=True)
-            count = 0
-            for link in links:
-                text = link.text.strip()
-                if len(text) > 10 and count < 2: 
-                    found_items.append({
-                        "title": text, 
-                        "date": datetime.date.today().strftime("%Y-%m-%d"), 
-                        "source": source
-                    })
-                    count += 1
+            # 假設標準 Open Data 回傳格式包含 "records" 陣列
+            for item in data.get("records", [])[:3]:
+                found_items.append({
+                    "title": item.get("title", ""),
+                    "date": item.get("date", datetime.date.today().strftime("%Y-%m-%d")),
+                    "source": source
+                })
             
             if not found_items:
-                raise ValueError("Structure mismatch")
+                raise ValueError("JSON API 中找不到預期資料")
                 
             results.extend(found_items)
             
         except Exception:
-            # Failover
+            # Fallback 備援機制：觸發並載入擴充後的假資料
             mock_items = get_mock_data_by_source(source)
             for item in mock_items:
                 item['title'] = f"[演示] {item['title']}"
@@ -188,18 +192,33 @@ def ai_applicability_check(text, equipment_list):
     return False, "無明確關鍵字，建議人工確認。"
 
 def ai_generate_detailed_table(law_content):
-    """第二階段：生成逐條分析表 (V2.3 邏輯優化版)"""
+    """第二階段：生成逐條分析表 (V2.3 Regex修復與關鍵字擴充版)"""
     lines = law_content.split('\n')
     data = []
     
     current_article = "第X條" # 記錄當前遍歷到的法規條次
 
+    # [擴充] AI 適用性判讀高風險關鍵字
+    high_keywords = ['應', '不得', '罰鍰', '霸凌', '不法侵害', '健康', '體格檢查', '母性', '噪音', '粉塵', '人因', '墜落', '感電', '防護', '承攬', '危害', '風險', '通風', '局排', '溶劑', '許可', '檢查', '申訴', '職災', '職業病', '安全', '衛生', '防護具']
+
     for line in lines:
         line = line.strip()
         if len(line) < 2: continue # 忽略空行
         
-        # 嘗試使用 Regex 解析「第 X 條」
-        match_article = re.match(r'^(第\s*[一二三四五六七八九十百千\d]+\s*條)\s*(.*)', line)
+        # [修復 Regex 1] 處理章節 (如: 第 一 章 總則)，作為獨立標題列
+        match_chapter = re.match(r'^(第\s*[一二三四五六七八九十百千\d]+\s*章)\s*(.*)', line)
+        if match_chapter:
+            chapter_num = match_chapter.group(1).replace(" ", "")
+            chapter_title = match_chapter.group(2).strip()
+            data.append({
+                "條文/項次": chapter_num,
+                "條文內容摘要": f"【章節標題】{chapter_title}" if chapter_title else "【章節標題】",
+                "適用性": "-"
+            })
+            continue
+
+        # [修復 Regex 2] 支援「第 X 條」、「第 X 條之 X」、「第 X-X 條」
+        match_article = re.match(r'^(第\s*[一二三四五六七八九十百千\d]+(?:\s*之\s*\d+|-\d+)?\s*條)\s*(.*)', line)
         
         if match_article:
             # 抓到新條文，更新當前條次
@@ -226,10 +245,9 @@ def ai_generate_detailed_table(law_content):
         if not content:
             continue
 
-        # 模擬 AI 適用性判讀邏輯
-        applicability = "高" if "應" in content or "不得" in content else "低"
+        # [擴充邏輯] 只要包含清單中任一關鍵字即為高
+        applicability = "高" if any(k in content for k in high_keywords) else "低"
         
-        # V2.3 修改：只保留指定的三個欄位
         data.append({
             "條文/項次": clause,
             "條文內容摘要": content[:30] + "..." if len(content) > 30 else content,
@@ -247,10 +265,8 @@ def ai_generate_detailed_table(law_content):
 
 with st.sidebar:
     st.title("用戶中心")
-    # [V2.3 修改] 1. 更新為具備職安衛意象的 Emoji 圖示並放大
     st.markdown("<h1 style='text-align: center; font-size: 75px; margin-top: -10px; margin-bottom: 10px;'>⛑️</h1>", unsafe_allow_html=True)
     
-    # [V2.3 修改] 2. 更改切換身分選單的文字
     user_role = st.selectbox("切換身份", ["職安室成員", "職安室主管"])
     st.info(f"目前登入：**{user_role}**")
     st.divider()
@@ -277,7 +293,6 @@ with tab1:
     with col2:
         st.write("") 
         st.write("") 
-        # [V2.3 修改] 3. 將按鈕上的版本號更新為 V2.3
         start_scraping = st.button("🚀 啟動智能爬蟲 (V2.3)", use_container_width=True)
 
     if start_scraping:
@@ -300,18 +315,16 @@ with tab1:
                         st.session_state['analysis_input_title'] = news['title']
                         st.session_state.step1_confirmed = False # 切換條文時重置狀態
                         st.session_state.analysis_df = None      # 切換條文時重置狀態
-                        st.toast(f"已複製：{news['title']}", icon="✅")
+                        # [優化 UX] 提示文字更新
+                        st.toast(f"已將「{news['title']}」帶入分析區，請切換至【適用性智慧判讀】分頁", icon="✅")
                 st.divider()
 
 # ------------------------------------------------------------------
-# 分頁 2: 適用性智慧判讀 (State-Driven Logic 保持不變)
+# 分頁 2: 適用性智慧判讀 (State-Driven Logic)
 # ------------------------------------------------------------------
 with tab2:
     st.subheader("🧠 兩階段適用性判讀 (State-Driven Logic)")
     
-    # --------------------------------
-    # 區域 A: 步驟一 (始終顯示)
-    # --------------------------------
     st.markdown('<div class="step-header">步驟一：法規適用性評估 (Applicability Check)</div>', unsafe_allow_html=True)
     
     st.info("🏭 當前廠區設定：工具機製造業 (Taichung Plant)")
@@ -319,13 +332,19 @@ with tab2:
     col_a_input, col_a_btn = st.columns([3, 1])
     
     with col_a_input:
+        # [擴充] 廠區設備更新
         equipment_selected = st.multiselect(
             "關聯廠內設備/製程：",
-            ['CNC機台', '堆高機', '高壓氣體', '天車', '化學槽', '鑄造爐'],
-            default=['CNC機台', '堆高機']
+            ['CNC機台', '堆高機', '高壓氣體', '天車', '熔解爐', '化學品', '有機溶劑', '研磨輪', '高空工作車', '圓盤鋸', '退火爐'],
+            default=['CNC機台', '化學品']
+        )
+        # [擴充] 新增議題類別
+        issue_selected = st.multiselect(
+            "涉及危害/議題類別：",
+            ['噪音', '粉塵', '人因工程', '不法侵害(霸凌)', '化學性危害', '健康檢查', '母性保護'],
+            default=['不法侵害(霸凌)']
         )
         
-        # 使用 Key 綁定 Session State 防止輸入消失
         input_title = st.text_input(
             "法規名稱 / 議題概述：", 
             value=st.session_state['analysis_input_title'],
@@ -336,60 +355,49 @@ with tab2:
     with col_a_btn:
         st.write("")
         st.write("")
-        # 按鈕 1: 執行適用性初判
         if st.button("🤖 執行適用性 AI 初判", type="primary"):
             if input_title:
                 is_app, reason = ai_applicability_check(input_title, equipment_selected)
                 if is_app:
                     st.success(reason)
-                    st.session_state.step1_confirmed = True  # 更新狀態：通過
-                    st.session_state.analysis_df = None      # 重置下游數據
+                    st.session_state.step1_confirmed = True  
+                    st.session_state.analysis_df = None      
                 else:
                     st.error(reason)
-                    st.session_state.step1_confirmed = False # 更新狀態：不通過
+                    st.session_state.step1_confirmed = False 
                     st.session_state.analysis_df = None
             else:
                 st.warning("請輸入法規名稱")
 
-    # --------------------------------
-    # 區域 B: 步驟二 (依據 step1_confirmed 狀態顯示)
-    # --------------------------------
     if st.session_state.step1_confirmed:
         st.markdown("---")
         st.markdown('<div class="step-header">步驟二：條文逐條查核 (Detailed Analysis)</div>', unsafe_allow_html=True)
         st.success(f"✅ 系統確認：此法規「{input_title}」適用於本廠，請繼續執行逐條分析。")
         
-        # 使用 Key 綁定 Session State 以保存長文內容
         law_content = st.text_area(
             "貼上法規條文內容 (支援多條文)：",
             height=200,
             placeholder="第 1 條：雇主對於機械之原動機、轉軸...\n一、防止危險之發生...",
-            value=st.session_state.law_content_buffer, # 讀取緩衝區
+            value=st.session_state.law_content_buffer,
             key="law_content_input" 
         )
         
-        # 按鈕 2: 生成報表
         if st.button("📊 生成法規鑑別對照表"):
             if law_content:
                 with st.spinner("AI 正在解析條文結構..."):
                     time.sleep(1)
                     df_result = ai_generate_detailed_table(law_content)
                     
-                    # 狀態更新：存入 DataFrame
                     st.session_state.analysis_df = df_result
-                    # 狀態更新：同步保存輸入內容，避免消失
                     st.session_state.law_content_buffer = law_content 
-                    st.rerun() # 強制刷新確保表格顯示
+                    st.rerun() 
             else:
                 st.warning("請先輸入條文內容。")
 
-    # --------------------------------
-    # 區域 C: 分析結果展示 (依據 analysis_df 是否存在顯示)
-    # --------------------------------
     if st.session_state.analysis_df is not None:
-        st.markdown("#### 📑 法規鑑別對照表 (精簡版)")
+        # [標題修正] 刪除 (精簡版)
+        st.markdown("#### 📑 法規鑑別對照表")
         
-        # 使用 data_editor 讓使用者可以微調 AI 結果
         edited_df = st.data_editor(
             st.session_state.analysis_df,
             use_container_width=True,
@@ -399,7 +407,6 @@ with tab2:
         
         c_btn1, c_btn2 = st.columns([1, 4])
         
-        # 按鈕 4: 清除重置
         with c_btn1:
             if st.button("🔄 清除重置"):
                 st.session_state.step1_confirmed = False
@@ -407,7 +414,6 @@ with tab2:
                 st.session_state.law_content_buffer = ""
                 st.rerun()
                 
-        # 按鈕 3: 立案送簽
         with c_btn2:
             if st.button("📝 將此分析立案並送出簽核", type="primary"):
                 summary_content = f"針對「{input_title}」進行鑑別，共 {len(edited_df)} 條項目。"
@@ -420,10 +426,11 @@ with tab2:
                     "department": "職安室 / 跨部門",
                     "status": "待簽核",
                     "manager_comment": "",
-                    "completion_date": ""
+                    "completion_date": "",
+                    "risk_level": "AI 判定"
                 }
                 st.session_state['audit_records'].insert(0, new_case)
-                save_records(st.session_state['audit_records']) # [持久化觸發點 1]
+                save_records(st.session_state['audit_records'])
                 st.success("✅ 案件已成功立案！請至【合規簽核紀錄】查看。")
 
 
@@ -455,20 +462,34 @@ with tab3:
                         "department": m_dept,
                         "status": "待簽核",
                         "manager_comment": "",
-                        "completion_date": ""
+                        "completion_date": "",
+                        "risk_level": m_risk,
+                        "suggestion": m_suggestion
                     }
                     st.session_state['audit_records'].insert(0, manual_case)
-                    save_records(st.session_state['audit_records']) # [持久化觸發點 2]
+                    save_records(st.session_state['audit_records'])
                     st.success(f"案件 {manual_case['id']} 已建立！")
                     
+                    # [優化] 電子郵件草稿內容豐富化
+                    deadline = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
                     draft = f"""
-                    主旨：【合規改善通知】{m_title} - {m_risk}風險
+                    主旨：【合規改善通知】{m_title} - 發現潛在風險需改善
                     
-                    {m_dept} 您好：
-                    經查核發現：{m_content}
-                    建議措施：{m_suggestion}
+                    {m_dept} 主管/同仁 您好：
                     
-                    請於期限內完成改善。
+                    依據本廠 ISO 45001 管理系統程序，近期查核發現以下事項，請貴單位協助確認並改善：
+                    
+                    📍 案件標題：{m_title}
+                    ⚠️ 發現內容：{m_content}
+                    🔴 風險評估：{m_risk}
+                    💡 建議措施：{m_suggestion}
+                    
+                    ⏳ 建議改善期限：{deadline}
+                    
+                    請於期限內回覆改善計畫或完成進度。感謝您的配合！
+                    
+                    此致
+                    職安室 敬上
                     """
                     st.info("📧 郵件草稿已生成：")
                     st.code(draft)
@@ -499,28 +520,57 @@ with tab3:
                 * **內容摘要：** {case['content']}
                 * **負責單位：** {case['department']}
                 """)
-                if st.button("📧 生成通知信草稿"):
-                    email_draft = f"主旨：合規確認 ({case['title']})\n\n請貴單位針對 {case['content']} 進行改善。"
-                    st.code(email_draft)
+                
+                # [RBAC 控管] 職安室成員視角
+                if user_role == "職安室成員":
+                    if st.button("📧 生成通知信草稿"):
+                        # [優化] 電子郵件草稿內容豐富化
+                        deadline = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                        r_level = case.get('risk_level', '系統評估')
+                        sug = case.get('suggestion', '依據法規或內規辦理')
+                        email_draft = f"""
+                        主旨：【合規改善通知】{case['title']} - 發現潛在風險需改善
+                        
+                        {case['department']} 主管/同仁 您好：
+                        
+                        依據本廠 ISO 45001 管理系統程序，近期查核發現以下事項，請貴單位協助確認並改善：
+                        
+                        📍 案件標題：{case['title']}
+                        ⚠️ 發現內容：{case['content']}
+                        🔴 風險評估：{r_level}
+                        💡 建議措施：{sug}
+                        
+                        ⏳ 建議改善期限：{deadline}
+                        
+                        請於期限內回覆改善計畫或完成進度。感謝您的配合！
+                        
+                        此致
+                        職安室 敬上
+                        """
+                        st.code(email_draft)
             
             with c2:
-                st.markdown("#### 主管決策")
-                comment = st.text_area("簽核意見：", key="mgr_comment")
-                col_btn1, col_btn2 = st.columns(2)
-                
-                if col_btn1.button("✅ 核准"):
-                    case['status'] = "已核准"
-                    case['manager_comment'] = comment if comment else "同意備查"
-                    case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
-                    save_records(st.session_state['audit_records']) # [持久化觸發點 3]
-                    st.rerun()
+                # [RBAC 控管] 職安室主管視角
+                if user_role == "職安室主管":
+                    st.markdown("#### 主管決策")
+                    comment = st.text_area("簽核意見：", key="mgr_comment")
+                    col_btn1, col_btn2 = st.columns(2)
                     
-                if col_btn2.button("❌ 退回"):
-                    case['status'] = "已退回"
-                    case['manager_comment'] = comment if comment else "資料不全，請補充"
-                    case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
-                    save_records(st.session_state['audit_records']) # [持久化觸發點 4]
-                    st.rerun()
+                    if col_btn1.button("✅ 核准"):
+                        case['status'] = "已核准"
+                        case['manager_comment'] = comment if comment else "同意備查"
+                        case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
+                        save_records(st.session_state['audit_records'])
+                        st.rerun()
+                        
+                    if col_btn2.button("❌ 退回"):
+                        case['status'] = "已退回"
+                        case['manager_comment'] = comment if comment else "資料不全，請補充"
+                        case['completion_date'] = datetime.date.today().strftime("%Y-%m-%d")
+                        save_records(st.session_state['audit_records'])
+                        st.rerun()
+                else:
+                    st.info("🔒 僅限「職安室主管」進行簽核決策。")
 
     st.markdown("---")
 
