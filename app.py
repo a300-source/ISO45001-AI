@@ -235,7 +235,7 @@ def ai_generate_detailed_table(law_content):
             
             data.append({
                 "條文/項次": current_article,
-                "條文內容摘要": full_text[:60] + "..." if len(full_text) > 60 else full_text,
+                "條文內容摘要": full_text,
                 "適用性": applicability
             })
 
