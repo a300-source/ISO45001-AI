@@ -430,7 +430,7 @@ with tab2:
             key="data_editor_result"
         )
         
-        c_btn1, c_btn2 = st.columns([1, 4])
+        c_btn1, c_btn_dl, c_btn2 = st.columns([1, 1.5, 3])
         
         with c_btn1:
             if st.button("🔄 清除重置"):
@@ -438,6 +438,17 @@ with tab2:
                 st.session_state.analysis_df = None
                 st.session_state.law_content_buffer = ""
                 st.rerun()
+                
+        with c_btn_dl:
+            # 轉換為帶有 BOM 的 UTF-8 編碼，解決 Excel 中文亂碼問題
+            csv_data = edited_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 下載對照表 (Excel專用)",
+                data=csv_data,
+                file_name="ISO45001_法規鑑別.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
                 
         with c_btn2:
             if st.button("📝 將此分析立案並送出簽核", type="primary"):
